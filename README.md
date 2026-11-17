@@ -16,3 +16,9 @@
 - [ ] 저장한 길을 다른 기기에서도 보기 (내보내기/가져오기 GPX 또는 서버 저장)
 - [ ] 걷기 중 화면 꺼짐 방지, 정확도 필터 개선
 - [ ] GitHub Pages로 배포해 폰에서 바로 접속
+
+## 폰에 설치해서 쓰기 (GitHub Pages)
+1. GitHub 저장소 Settings → Pages → Branch를 `claude/exciting-davinci-c0s3k5`, 폴더 `/ (root)`로 선택 후 Save
+   (무료 계정은 저장소가 공개(public)여야 Pages를 쓸 수 있어요)
+2. 1~2분 뒤 `https://hwan2go.github.io/bongsan-walk/` 주소가 생겨요
+3. 폰 Chrome/Safari에서 그 주소를 열고 위치 허용 → "홈 화면에 추가"
