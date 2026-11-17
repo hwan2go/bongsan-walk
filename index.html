@@ -19,7 +19,7 @@ p.sub{margin:0 0 16px;color:var(--sub);font-size:16px}
 .stat b{display:block;font-size:26px}
 .stat span{font-size:14px;color:var(--sub)}
 #here{margin:8px 0 0;font-size:15px}
-canvas{width:100%;height:300px;background:var(--card);border:1px solid var(--line);border-radius:10px;display:block}
+canvas{width:100%;aspect-ratio:640/600;max-height:62vh;background:var(--card);border:1px solid var(--line);border-radius:10px;display:block}
 button{font:inherit;font-weight:700;border:0;border-radius:10px;cursor:pointer;color:var(--btn-ink)}
 button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
 #main-btn{width:100%;margin:12px 0;padding:18px;font-size:22px;background:var(--go)}
@@ -39,13 +39,14 @@ h2{font-size:20px;margin:8px 0}
 <body>
 <main>
 <h1>봉산 걷기 기록</h1>
-<p class="sub">시작을 누르고 걸으면 지나간 길이 그려져요.</p>
+<p class="sub">시작을 누르고 걸으면 지도 위에 지나간 길이 그려져요.</p>
 <div class="stats">
 <div class="stat"><b id="dist">0 m</b><span>거리</span></div>
 <div class="stat"><b id="time">0:00</b><span>시간</span></div>
 <div class="stat"><b id="pts">0</b><span>기록한 점</span></div>
 </div>
 <canvas id="cv" width="640" height="600"></canvas>
+<p id="mapnote" class="sub"></p>
 <p id="here" class="sub">현재 위치를 찾는 중이에요…</p>
 <button id="main-btn">걷기 시작</button>
 <button id="here-btn">내 위치 보기</button>
@@ -57,6 +58,7 @@ h2{font-size:20px;margin:8px 0}
 <div id="list"></div>
 </main>
 <script>
+var cur=null,mode="here";
 var pts=[],dist=0,t0=0,timer=null,watchId=null,running=false;
 var $=function(i){return document.getElementById(i)};
 var cv=$("cv"),ctx=cv.getContext("2d");
@@ -66,19 +68,44 @@ var x=Math.sin(dl/2)*Math.sin(dl/2)+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin
 return 2*R*Math.asin(Math.sqrt(x))}
 function fmtT(s){var m=Math.floor(s/60),c=s%60;return m+":"+(c<10?"0":"")+c}
 function fmtD(d){return d>=1000?(d/1000).toFixed(2)+" km":Math.round(d)+" m"}
-function draw(p){
-ctx.clearRect(0,0,cv.width,cv.height);
-if(p.length<1){ctx.fillStyle=css("--sub");ctx.font="26px sans-serif";ctx.textAlign="center";ctx.fillText("아직 기록이 없어요",cv.width/2,cv.height/2);return}
-var la=p.map(function(q){return q.lat}),ln=p.map(function(q){return q.lng});
-var minA=Math.min.apply(null,la),maxA=Math.max.apply(null,la),minN=Math.min.apply(null,ln),maxN=Math.max.apply(null,ln);
-var k=Math.cos(minA*Math.PI/180),w=Math.max((maxN-minN)*k,1e-5),h=Math.max(maxA-minA,1e-5),pad=40;
-var s=Math.min((cv.width-2*pad)/w,(cv.height-2*pad)/h);
-var ox=(cv.width-w*s)/2,oy=(cv.height-h*s)/2;
-function X(q){return ox+(q.lng-minN)*k*s}function Y(q){return oy+(maxA-q.lat)*s}
-ctx.lineWidth=6;ctx.lineJoin="round";ctx.lineCap="round";ctx.strokeStyle=css("--go");
+var TS=256,tiles={},tileOk=0,tileFail=0,shown=[],rq=0;
+function wx(lng,z){return TS*Math.pow(2,z)*(lng+180)/360}
+function wy(lat,z){var r=lat*Math.PI/180;return TS*Math.pow(2,z)*(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2}
+function tile(z,x,y){var n=Math.pow(2,z);x=((x%n)+n)%n;var k=z+"/"+x+"/"+y;
+if(!tiles[k]){var im=new Image();im.onload=function(){tileOk++;sched()};im.onerror=function(){tileFail++;im.bad=1;sched()};
+im.src="https://tile.openstreetmap.org/"+k+".png";tiles[k]=im}return tiles[k]}
+function sched(){if(rq)return;rq=requestAnimationFrame(function(){rq=0;paint()})}
+function paint(){mode==="path"?paintPath(shown):paintHere()}
+function bg(cx,cy,z){
+ctx.fillStyle=css("--card");ctx.fillRect(0,0,cv.width,cv.height);
+var x0=cx-cv.width/2,y0=cy-cv.height/2,n=Math.pow(2,z);
+for(var ty=Math.floor(y0/TS);ty<=Math.floor((y0+cv.height)/TS);ty++){
+if(ty<0||ty>=n)continue;
+for(var tx=Math.floor(x0/TS);tx<=Math.floor((x0+cv.width)/TS);tx++){
+var im=tile(z,tx,ty);if(im.complete&&!im.bad&&im.naturalWidth)ctx.drawImage(im,tx*TS-x0,ty*TS-y0,TS,TS)}}
+ctx.font="14px sans-serif";ctx.textAlign="right";ctx.fillStyle="rgba(0,0,0,.65)";
+var t="© OpenStreetMap";var w=ctx.measureText(t).width+10;
+ctx.fillStyle="rgba(255,255,255,.75)";ctx.fillRect(cv.width-w,cv.height-22,w,22);
+ctx.fillStyle="#333";ctx.fillText(t,cv.width-5,cv.height-6)}
+function mapNote(){
+if(tileFail>0&&tileOk===0)$("mapnote").textContent="지도 그림을 불러오지 못해 길만 그려요. 아래 지도 버튼으로 크게 볼 수 있어요.";
+else $("mapnote").textContent=""}
+function paintPath(p){
+if(p.length<1){bg(wx(127,2),wy(37,2),2);ctx.fillStyle=css("--ink");ctx.font="26px sans-serif";ctx.textAlign="center";ctx.fillText("아직 기록이 없어요",cv.width/2,cv.height/2);return}
+var minA=90,maxA=-90,minN=180,maxN=-180;
+p.forEach(function(q){minA=Math.min(minA,q.lat);maxA=Math.max(maxA,q.lat);minN=Math.min(minN,q.lng);maxN=Math.max(maxN,q.lng)});
+var z=17,pad=50;
+for(;z>3;z--){var w=wx(maxN,z)-wx(minN,z),h=wy(minA,z)-wy(maxA,z);if(w<=cv.width-2*pad&&h<=cv.height-2*pad)break}
+var cx=(wx(minN,z)+wx(maxN,z))/2,cy=(wy(minA,z)+wy(maxA,z))/2;
+bg(cx,cy,z);
+function X(q){return wx(q.lng,z)-cx+cv.width/2}function Y(q){return wy(q.lat,z)-cy+cv.height/2}
+ctx.lineWidth=9;ctx.lineJoin="round";ctx.lineCap="round";ctx.strokeStyle="#fff";
 ctx.beginPath();p.forEach(function(q,i){i?ctx.lineTo(X(q),Y(q)):ctx.moveTo(X(q),Y(q))});ctx.stroke();
-ctx.fillStyle=css("--ink");ctx.beginPath();ctx.arc(X(p[0]),Y(p[0]),9,0,7);ctx.fill();
-ctx.fillStyle=css("--stop");ctx.beginPath();ctx.arc(X(p[p.length-1]),Y(p[p.length-1]),9,0,7);ctx.fill()}
+ctx.lineWidth=5;ctx.strokeStyle="#d8452b";
+ctx.beginPath();p.forEach(function(q,i){i?ctx.lineTo(X(q),Y(q)):ctx.moveTo(X(q),Y(q))});ctx.stroke();
+function dot(q,c){ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(X(q),Y(q),12,0,7);ctx.fill();ctx.fillStyle=c;ctx.beginPath();ctx.arc(X(q),Y(q),8,0,7);ctx.fill()}
+dot(p[0],"#2f6b3a");dot(p[p.length-1],"#1d4ed8");mapNote()}
+function draw(p){shown=p;mode="path";paintPath(p)}
 function upd(){$("dist").textContent=fmtD(dist);$("pts").textContent=pts.length;
 $("time").textContent=fmtT(Math.round((Date.now()-t0)/1000))}
 function onPos(e){
@@ -86,11 +113,11 @@ if(e.coords.accuracy>50){$("msg").textContent="신호가 약해요. 잠시 기�
 $("msg").textContent="기록하는 중이에요.";
 var q={lat:e.coords.latitude,lng:e.coords.longitude,t:Date.now()};
 if(pts.length){var d=hav(pts[pts.length-1],q);if(d<3)return;dist+=d}
-pts.push(q);if(mode==="path")draw(pts);upd()}
+pts.push(q);if(mode==="path"){shown=pts;paintPath(pts)}upd()}
 function onErr(e){$("msg").textContent=e.code===1?"위치 허용이 꺼져 있어요. 브라우저에서 위치를 허용해 주세요.":"위치를 가져오지 못했어요. 하늘이 트인 곳에서 다시 해보세요."}
 function start(){
 if(!navigator.geolocation){$("msg").textContent="이 브라우저는 위치 기능을 지원하지 않아요.";return}
-mode="path";pts=[];dist=0;t0=Date.now();running=true;$("save").hidden=true;
+mode="path";shown=pts=[];dist=0;t0=Date.now();running=true;$("save").hidden=true;
 $("main-btn").textContent="걷기 멈춤";$("main-btn").className="on";$("msg").textContent="위치를 찾는 중이에요…";
 draw(pts);upd();
 timer=setInterval(upd,1000);
@@ -112,19 +139,19 @@ if(!a.length){box.innerHTML='<p class="sub">아직 저장한 길이 없어요.</
 a.forEach(function(w,i){
 var r=document.createElement("div");r.className="row";
 var t=document.createElement("div");t.textContent=w.name+" · "+fmtD(w.dist);
-var v=document.createElement("button");v.textContent="보기";v.onclick=function(){mode="path";draw(w.pts);scrollTo(0,0)};
+var v=document.createElement("button");v.textContent="보기";v.onclick=function(){draw(w.pts);scrollTo(0,0)};
 var x=document.createElement("button");x.className="del";x.textContent="삭제";
 x.onclick=function(){var b=load();b.splice(i,1);store(b);render()};
 r.appendChild(t);r.appendChild(v);r.appendChild(x);box.appendChild(r)})}
-var cur=null,mode="here";
-function drawHere(){
-ctx.clearRect(0,0,cv.width,cv.height);
-ctx.textAlign="center";ctx.font="26px sans-serif";
-if(!cur){ctx.fillStyle=css("--sub");ctx.fillText("내 위치를 찾는 중…",cv.width/2,cv.height/2);return}
+
+function drawHere(){paintHere()}
+function paintHere(){
+if(!cur){bg(wx(127,2),wy(37,2),2);ctx.fillStyle=css("--ink");ctx.textAlign="center";ctx.font="26px sans-serif";ctx.fillText("내 위치를 찾는 중…",cv.width/2,cv.height/2);return}
+var z=17;bg(wx(cur.lng,z),wy(cur.lat,z),z);
 var x=cv.width/2,y=cv.height/2;
-ctx.fillStyle=css("--go");ctx.globalAlpha=0.2;ctx.beginPath();ctx.arc(x,y,70,0,7);ctx.fill();ctx.globalAlpha=1;
-ctx.fillStyle=css("--stop");ctx.beginPath();ctx.arc(x,y,16,0,7);ctx.fill();
-ctx.fillStyle=css("--ink");ctx.fillText("지금 내 위치",x,y+120)}
+ctx.fillStyle="rgba(29,78,216,.2)";ctx.beginPath();ctx.arc(x,y,60,0,7);ctx.fill();
+ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(x,y,16,0,7);ctx.fill();
+ctx.fillStyle="#1d4ed8";ctx.beginPath();ctx.arc(x,y,11,0,7);ctx.fill();mapNote()}
 function onHere(e){
 cur={lat:e.coords.latitude,lng:e.coords.longitude};
 $("here").textContent="현재 위치: 위도 "+cur.lat.toFixed(5)+", 경도 "+cur.lng.toFixed(5)+" (오차 약 "+Math.round(e.coords.accuracy)+" m)";
