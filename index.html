@@ -37,6 +37,12 @@ h2{font-size:20px;margin:8px 0}
 .row{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
 .row div{flex:1;font-size:16px}
 .row button{padding:8px 12px;font-size:15px;background:var(--go)}
+#follow{background:var(--card);border:2px solid var(--go);border-radius:10px;padding:12px;margin:8px 0}
+#follow[hidden]{display:none}
+#fmsg{font-size:22px;font-weight:700;margin:0 0 8px}
+#fsub{font-size:16px;color:var(--sub);margin:0 0 10px}
+#fend{width:100%;padding:12px;font-size:18px;background:var(--stop)}
+.row{flex-wrap:wrap}
 .row button.del{background:var(--stop)}
 </style>
 </head>
@@ -56,6 +62,7 @@ h2{font-size:20px;margin:8px 0}
 <button id="here-btn">내 위치 보기</button>
 <a id="g-map" class="mapbtn" target="_blank" rel="noopener">구글 지도에서 내 위치 보기</a>
 <a id="k-map" class="mapbtn" target="_blank" rel="noopener">카카오맵에서 내 위치 보기</a>
+<div id="follow" hidden><p id="fmsg">위치를 찾는 중이에요…</p><p id="fsub"></p><button id="fend">따라가기 끝내기</button></div>
 <p id="msg"></p>
 <button id="save" hidden>이 길 저장하기</button>
 <h2>저장한 길</h2>
@@ -79,7 +86,7 @@ function tile(z,x,y){var n=Math.pow(2,z);x=((x%n)+n)%n;var k=z+"/"+x+"/"+y;
 if(!tiles[k]){var im=new Image();im.onload=function(){tileOk++;sched()};im.onerror=function(){tileFail++;im.bad=1;sched()};
 im.src="https://tile.openstreetmap.org/"+k+".png";tiles[k]=im}return tiles[k]}
 function sched(){if(rq)return;rq=requestAnimationFrame(function(){rq=0;paint()})}
-function paint(){mode==="path"?paintPath(shown):paintHere()}
+function paint(){mode==="path"?paintPath(shown):mode==="follow"?paintFollow():paintHere()}
 function bg(cx,cy,z){
 ctx.fillStyle=css("--card");ctx.fillRect(0,0,cv.width,cv.height);
 var x0=cx-cv.width/2,y0=cy-cv.height/2,n=Math.pow(2,z);
@@ -144,9 +151,10 @@ a.forEach(function(w,i){
 var r=document.createElement("div");r.className="row";
 var t=document.createElement("div");t.textContent=w.name+" · "+fmtD(w.dist);
 var v=document.createElement("button");v.textContent="보기";v.onclick=function(){draw(w.pts);scrollTo(0,0)};
+var f=document.createElement("button");f.textContent="따라가기";f.onclick=function(){startFollow(w)};
 var x=document.createElement("button");x.className="del";x.textContent="삭제";
 x.onclick=function(){var b=load();b.splice(i,1);store(b);render()};
-r.appendChild(t);r.appendChild(v);r.appendChild(x);box.appendChild(r)})}
+r.appendChild(t);r.appendChild(v);r.appendChild(f);r.appendChild(x);box.appendChild(r)})}
 
 function drawHere(){paintHere()}
 function paintHere(){
@@ -156,12 +164,68 @@ var x=cv.width/2,y=cv.height/2;
 ctx.fillStyle="rgba(29,78,216,.2)";ctx.beginPath();ctx.arc(x,y,60,0,7);ctx.fill();
 ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(x,y,16,0,7);ctx.fill();
 ctx.fillStyle="#1d4ed8";ctx.beginPath();ctx.arc(x,y,11,0,7);ctx.fill();mapNote()}
+
+var fr=null,fi=0,fcum=[],ftgt=null,fwarn=0,fdone=false;
+function bear(a,b){var r=Math.PI/180,y=Math.sin((b.lng-a.lng)*r)*Math.cos(b.lat*r),x=Math.cos(a.lat*r)*Math.sin(b.lat*r)-Math.sin(a.lat*r)*Math.cos(b.lat*r)*Math.cos((b.lng-a.lng)*r);return (Math.atan2(y,x)/r+360)%360}
+function dir8(b){return["북","북동","동","남동","남","남서","서","북서"][Math.round(b/45)%8]+"쪽"}
+function say(t){try{if(window.speechSynthesis){speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(t);u.lang="ko-KR";speechSynthesis.speak(u)}}catch(e){}}
+function startFollow(w){
+if(!w.pts||w.pts.length<2)return;
+fr=w.pts;fi=0;fdone=false;fwarn=0;ftgt=null;fcum=[0];
+for(var i=1;i<fr.length;i++)fcum.push(fcum[i-1]+hav(fr[i-1],fr[i]));
+mode="follow";$("follow").hidden=false;$("fmsg").textContent="위치를 찾는 중이에요…";$("fsub").textContent="길 이름: "+w.name;
+say("따라가기를 시작해요. 출발점으로 가세요.");
+paint();scrollTo(0,0);if(cur)navStep()}
+$("fend").onclick=function(){fr=null;mode="here";$("follow").hidden=true;paint()};
+function navStep(){
+if(!fr||!cur)return;
+var best=fi,bd=1e9,end=Math.min(fr.length-1,fi+40);
+for(var i=fi;i<=end;i++){var d=hav(cur,fr[i]);if(d<bd){bd=d;best=i}}
+if(bd>60){for(var j=0;j<fr.length;j++){var d2=hav(cur,fr[j]);if(d2<bd){bd=d2;best=j}}}
+if(bd<=30)fi=best;
+var rem=fcum[fr.length-1]-fcum[fi];
+var tg=fi,look=fcum[fi]+25;
+while(tg<fr.length-1&&fcum[tg]<look)tg++;
+ftgt=fr[tg];
+var m=$("fmsg"),sub=$("fsub");
+if(fi>=fr.length-2&&hav(cur,fr[fr.length-1])<20){
+m.textContent="도착했어요!";sub.textContent="수고하셨어요.";if(!fdone){fdone=true;say("도착했어요. 수고하셨어요.");try{navigator.vibrate&&navigator.vibrate(300)}catch(e){}}paint();return}
+fdone=false;
+if(bd>30){
+m.textContent="길에서 벗어났어요 ("+Math.round(bd)+" m)";
+sub.textContent="가까운 길은 "+dir8(bear(cur,fr[best]))+"에 있어요. 남은 거리 약 "+fmtD(rem);
+var now=Date.now();if(now-fwarn>15000){fwarn=now;say("길에서 벗어났어요. "+dir8(bear(cur,fr[best]))+"으로 돌아가세요.");try{navigator.vibrate&&navigator.vibrate([200,100,200])}catch(e){}}
+}else{
+var b=bear(cur,ftgt),txt;
+if(cur.h!=null&&!isNaN(cur.h)){var rel=(b-cur.h+540)%360-180;txt=Math.abs(rel)<25?"곧장 앞으로":rel>0?(rel>110?"뒤로 돌아서 오른쪽":"오른쪽으로"):(rel<-110?"뒤로 돌아서 왼쪽":"왼쪽으로")}
+else txt=dir8(b)+"으로";
+m.textContent="길 위예요. "+txt;sub.textContent="남은 거리 "+fmtD(rem)+" · 진행 "+Math.round(100*fcum[fi]/Math.max(1,fcum[fr.length-1]))+"%";
+}
+paint()}
+function paintFollow(){
+if(!fr){return}
+var p=fr.slice();if(cur)p.push(cur);
+var minA=90,maxA=-90,minN=180,maxN=-180;
+p.forEach(function(q){minA=Math.min(minA,q.lat);maxA=Math.max(maxA,q.lat);minN=Math.min(minN,q.lng);maxN=Math.max(maxN,q.lng)});
+var z=17,pad=50;
+for(;z>3;z--){var w=wx(maxN,z)-wx(minN,z),h=wy(minA,z)-wy(maxA,z);if(w<=cv.width-2*pad&&h<=cv.height-2*pad)break}
+var cx=(wx(minN,z)+wx(maxN,z))/2,cy=(wy(minA,z)+wy(maxA,z))/2;
+bg(cx,cy,z);
+function X(q){return wx(q.lng,z)-cx+cv.width/2}function Y(q){return wy(q.lat,z)-cy+cv.height/2}
+function line(a,b,c,wd){ctx.lineWidth=wd;ctx.strokeStyle=c;ctx.lineJoin="round";ctx.lineCap="round";ctx.beginPath();for(var i=a;i<=b;i++){i===a?ctx.moveTo(X(fr[i]),Y(fr[i])):ctx.lineTo(X(fr[i]),Y(fr[i]))}ctx.stroke()}
+line(0,fr.length-1,"#fff",11);line(0,fr.length-1,"#1d4ed8",6);
+if(fi>0)line(0,fi,"#8a8a8a",6);
+function dot(q,c,r){ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(X(q),Y(q),r+4,0,7);ctx.fill();ctx.fillStyle=c;ctx.beginPath();ctx.arc(X(q),Y(q),r,0,7);ctx.fill()}
+dot(fr[0],"#2f6b3a",8);dot(fr[fr.length-1],"#111",8);
+if(cur){if(ftgt){ctx.setLineDash([10,8]);ctx.lineWidth=4;ctx.strokeStyle="#f59e0b";ctx.beginPath();ctx.moveTo(X(cur),Y(cur));ctx.lineTo(X(ftgt),Y(ftgt));ctx.stroke();ctx.setLineDash([])}
+dot(cur,"#d8452b",10)}
+mapNote()}
 function onHere(e){
-cur={lat:e.coords.latitude,lng:e.coords.longitude};
+cur={lat:e.coords.latitude,lng:e.coords.longitude};cur.h=e.coords.heading;if(mode==="follow")navStep();
 $("here").textContent="현재 위치: 위도 "+cur.lat.toFixed(5)+", 경도 "+cur.lng.toFixed(5)+" (오차 약 "+Math.round(e.coords.accuracy)+" m)";
 $("g-map").href="https://www.google.com/maps?q="+cur.lat+","+cur.lng;$("k-map").href="https://map.kakao.com/link/map/%EB%82%B4%EC%9C%84%EC%B9%98,"+cur.lat+","+cur.lng;if(mode==="here")drawHere()}
 function onHereErr(e){$("here").textContent=e.code===1?"위치 허용이 꺼져 있어요. 브라우저에서 위치를 허용해 주세요.":"현재 위치를 가져오지 못했어요. 하늘이 트인 곳에서 다시 해보세요."}
-$("here-btn").onclick=function(){mode="here";drawHere()};
+$("here-btn").onclick=function(){fr=null;$("follow").hidden=true;mode="here";drawHere()};
 if(navigator.geolocation)navigator.geolocation.watchPosition(onHere,onHereErr,{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
 drawHere();render();
 var wl=null;
